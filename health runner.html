@@ -1,0 +1,259 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Health Runner: The Final Burn</title><style>body{margin:0;background:#1a1a1a;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}#game-container{position:relative;box-shadow:0 0 20px rgba(0,0,0,.5)}canvas{background:#333;display:block;border-radius:4px}.ui-layer{position:absolute;width:100%;pointer-events:none}#hud{top:10px;display:flex;justify-content:space-between;padding:0 20px;box-sizing:border-box;font-weight:700;font-size:18px;text-shadow:1px 1px 2px #000}.stat-box{background:rgba(0,0,0,.6);padding:5px 10px;border-radius:8px}#message-overlay{top:40%;text-align:center;width:100%;font-size:24px;text-shadow:0 2px 4px rgba(0,0,0,.8);transition:opacity .5s}#end-screen{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(15,23,42,.95);display:none;flex-direction:column;align-items:center;justify-content:center;text-align:center;pointer-events:auto}h1{margin:0 0 10px 0;color:#4ade80}.result-stat{font-size:20px;margin:10px 0}.big-number{font-size:48px;font-weight:700;color:#fbbf24}button{margin-top:20px;padding:10px 25px;font-size:18px;background:#2563eb;color:#fff;border:none;border-radius:5px;cursor:pointer;transition:background .2s}button:hover{background:#1d4ed8}#controls-hint{position:absolute;bottom:20px;width:100%;text-align:center;opacity:.7;font-size:14px}</style></head><body><div id="game-container"><canvas id="gameCanvas" width="400" height="600"></canvas><div id="hud" class="ui-layer"><div class="stat-box">Stage:<span id="stage-val">1</span>/10</div><div class="stat-box" style="color:#4ade80">Energy:<span id="energy-val">0</span></div></div><div id="message-overlay" class="ui-layer"></div><div id="controls-hint" class="ui-layer">Use ⬅️ Left / Right ➡️ Arrows to Choose Lane</div><div id="end-screen"><h1>RUN COMPLETE</h1><div class="result-stat">Final Energy Stack:<span id="final-energy">0</span></div><div class="result-stat">Burning energy into distance...</div><div class="big-number"><span id="final-distance">0</span>m</div><button onclick="location.reload()">Run Again</button></div></div><script>/**
+ * GAME CONFIGURATION
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Game State
+const STATE = {
+    START: 0,
+    RUNNING: 1,
+    BURNING: 2, // The final calculation phase
+    FINISHED: 3
+};
+
+let currentState = STATE.RUNNING;
+let frameCount = 0;
+let score = 0; // "Energy"
+let stage = 1;
+const maxStages = 10;
+
+// Player
+const player = {
+    lane: 0, // 0 = left, 1 = right
+    y: 500,
+    width: 40,
+    height: 40,
+    color: '#3b82f6', // blue
+    targetX: 100 // Visual interpolation target
+};
+
+// Lanes
+const lanes = [100, 300]; // X coordinates for Left and Right lanes
+
+// Current pair of incoming objects
+let obstaclePair = {
+    active: false,
+    y: -50,
+    speed: 2,
+    leftType: null,  // 'buff' or 'nerf'
+    rightType: null
+};
+
+// Floating Text Particles
+let particles = [];
+
+/**
+ * LOGIC
+ */
+
+// Types of items
+const TYPES = {
+    BUFF: { color: '#22c55e', text: '🥗', val: 10, label: '+10 Energy' },
+    NERF: { color: '#ef4444', text: '🍔', val: -10, label: '-10 Sluggish' }
+};
+
+function init() {
+    spawnNextWave();
+    requestAnimationFrame(loop);
+}
+
+function spawnNextWave() {
+    if (stage > maxStages) {
+        startBurnPhase();
+        return;
+    }
+    
+    // Determine which lane gets the buff (randomize)
+    const isBuffLeft = Math.random() > 0.5;
+    
+    obstaclePair.leftType = isBuffLeft ? TYPES.BUFF : TYPES.NERF;
+    obstaclePair.rightType = isBuffLeft ? TYPES.NERF : TYPES.BUFF;
+    
+    obstaclePair.y = -100; // Start off screen
+    obstaclePair.active = true;
+    obstaclePair.speed = 2 + (stage * 0.2); // Get slightly faster
+}
+
+function update() {
+    if (currentState === STATE.RUNNING) {
+        // Update Player Visual Position (Lerp for smoothness)
+        let target = lanes[player.lane];
+        player.targetX += (target - player.targetX) * 0.2;
+
+        // Move Obstacles
+        if (obstaclePair.active) {
+            obstaclePair.y += obstaclePair.speed;
+
+            // Collision Check
+            // Simple box collision based on Y-axis crossing
+            if (obstaclePair.y > player.y - 20 && obstaclePair.y < player.y + 20) {
+                resolveCollision();
+            }
+        }
+    } else if (currentState === STATE.BURNING) {
+        // Animation logic handled in loop visualizer
+    }
+
+    // Update particles (floating text)
+    particles.forEach((p, index) => {
+        p.y -= 1;
+        p.life--;
+        if(p.life <= 0) particles.splice(index, 1);
+    });
+}
+
+function resolveCollision() {
+    obstaclePair.active = false; // Disable until next spawn
+    
+    // Determine what we hit based on current lane
+    const itemHit = (player.lane === 0) ? obstaclePair.leftType : obstaclePair.rightType;
+    
+    // Apply stats
+    score += itemHit.val;
+    
+    // Visual Feedback
+    addParticle(lanes[player.lane], player.y, itemHit.label, itemHit.val > 0 ? '#4ade80' : '#f87171');
+    
+    // UI Update
+    updateUI();
+
+    // Prepare next
+    stage++;
+    setTimeout(spawnNextWave, 500); // Slight delay before next pair appears
+}
+
+function startBurnPhase() {
+    currentState = STATE.BURNING;
+    document.getElementById('hud').style.display = 'none';
+    document.getElementById('controls-hint').style.display = 'none';
+    
+    // Show End Screen
+    const endScreen = document.getElementById('end-screen');
+    endScreen.style.display = 'flex';
+    document.getElementById('final-energy').innerText = score;
+    
+    // Animate the "Burn"
+    let currentDist = 0;
+    // Calculation: Net score * 5 meters. Minimum 0 (cannot run negative distance).
+    let maxDist = Math.max(0, score * 5); 
+    
+    let counterElement = document.getElementById('final-distance');
+    
+    let interval = setInterval(() => {
+        if (currentDist < maxDist) {
+            currentDist += 1; // Count up speed
+            counterElement.innerText = currentDist;
+        } else {
+            clearInterval(interval);
+            currentState = STATE.FINISHED;
+        }
+    }, 20); // Speed of counting
+}
+
+function addParticle(x, y, text, color) {
+    particles.push({x, y, text, color, life: 60});
+}
+
+/**
+ * DRAWING
+ */
+function draw() {
+    // 1. Background (Road)
+    ctx.fillStyle = "#333";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Road Markings
+    ctx.strokeStyle = "#555";
+    ctx.setLineDash([20, 20]);
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(canvas.width / 2, 0);
+    ctx.lineTo(canvas.width / 2, canvas.height); // Center divider
+    ctx.stroke();
+
+    // Side lines
+    ctx.strokeStyle = "#fff";
+    ctx.setLineDash([]);
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(10, canvas.height);
+    ctx.moveTo(canvas.width - 10, 0);
+    ctx.lineTo(canvas.width - 10, canvas.height);
+    ctx.stroke();
+
+    if (currentState === STATE.RUNNING) {
+        // 2. Draw Obstacles (The Choices)
+        if (obstaclePair.active) {
+            drawItem(lanes[0], obstaclePair.y, obstaclePair.leftType);
+            drawItem(lanes[1], obstaclePair.y, obstaclePair.rightType);
+        }
+
+        // 3. Draw Player
+        // Shadow
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.beginPath();
+        ctx.ellipse(player.targetX, player.y + 25, 20, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Body (Emoji for "Man")
+        ctx.font = "40px Arial";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("🏃", player.targetX, player.y);
+    }
+
+    // 4. Draw Particles
+    particles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.font = "bold 20px Arial";
+        ctx.fillText(p.text, p.x, p.y);
+    });
+}
+
+function drawItem(x, y, type) {
+    // Draw the Food Emoji
+    ctx.font = "40px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(type.text, x, y);
+    
+    // Draw Text Label below it
+    ctx.fillStyle = "white";
+    ctx.font = "12px Arial";
+    ctx.fillText(type === TYPES.BUFF ? "HEALTHY" : "FAST FOOD", x, y + 30);
+}
+
+function loop() {
+    update();
+    draw();
+    if (currentState !== STATE.FINISHED) {
+        requestAnimationFrame(loop);
+    }
+}
+
+function updateUI() {
+    document.getElementById('energy-val').innerText = score;
+    document.getElementById('stage-val').innerText = Math.min(stage, 10);
+    
+    // Change color based on score health
+    const eVal = document.getElementById('energy-val');
+    eVal.style.color = score >= 0 ? '#4ade80' : '#f87171';
+}
+
+/**
+ * INPUTS
+ */
+window.addEventListener('keydown', (e) => {
+    if (currentState !== STATE.RUNNING) return;
+
+    if (e.key === 'ArrowLeft') {
+        player.lane = 0;
+    } else if (e.key === 'ArrowRight') {
+        player.lane = 1;
+    }
+});
+
+// Start
+init();</script></body></html>
